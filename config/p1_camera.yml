@@ -1,0 +1,20 @@
+%YAML 1.2
+---
+image_width: 960
+image_height: 540
+K: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 831.38438763306112, 0., 480., 0., 831.38438763306112, 270.,
+       0., 0., 1. ]
+dist: !!opencv-matrix
+   rows: 1
+   cols: 5
+   dt: d
+   data: [ 0., 0., 0., 0., 0. ]
+height_m: 1.212041783042378
+pitch_rad: -0.043926828017394254
+yaw_rad: 0.0022457211752532446
+intrinsics_calibrated: 0
+mount_calibrated: 1
