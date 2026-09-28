@@ -1,10 +1,10 @@
 # Atlas Autonomy
 
-C++ learning sim: bicycle vehicle, Pure Pursuit, a tiny world model, and a synthetic camera. Optional **webcam preview** via OpenCV. The webcam is a sensor window — it does **not** steer a real car, and it does not replace the simulated path yet.
+C++ learning sim: bicycle vehicle, Pure Pursuit, and optional **Atlas Vision** (webcam → lane overlay → steering). `--webcam` does **not** drive a real car. It steers the **simulated** bicycle from lines in the camera image.
 
 ```text
-Road → synthetic camera → PerceptionOutput → WorldState → plan → control → Vehicle
-Webcam (optional) → OpenCV window (preview only)
+./atlas              waypoints → Pure Pursuit → Vehicle
+./atlas --webcam     camera → Canny/Hough lanes → steering/speed → Vehicle
 ```
 
 ## Run the sim (no camera)
@@ -30,9 +30,9 @@ cmake --build build
 
 A good run prints three `Reached waypoint` lines and `Path complete` (~8 s).
 
-## Webcam preview (Mac is the easy test)
+## Atlas Vision (`--webcam`)
 
-Install OpenCV, **reconfigure** CMake (delete `build` if you configured before OpenCV existed), rebuild, then:
+The window stays open until you press **q**. It does **not** quit when a simulated waypoint is reached.
 
 ```bash
 brew install cmake opencv
@@ -41,10 +41,11 @@ cmake --build build
 ./build/atlas --webcam
 ```
 
-- Allow **Camera** for Terminal (or iTerm/Cursor) in System Settings → Privacy & Security.
-- A window titled `Atlas webcam` should show the laptop camera.
-- Press `q` in that window to stop.
-- CMake should print `OpenCV … — ./atlas --webcam enabled`. If it prints `OpenCV not found`, the prefix path is wrong.
+- Allow **Camera** for Terminal (or Cursor) in System Settings.
+- Point the camera at a hallway, road, or two parallel edges (tape on the floor works).
+- Teal corridor + orange path = Tesla-style overlay. Steering and speed come from those lanes.
+- CMake must print `OpenCV … — ./atlas --webcam enabled`.
+- This is classical CV (Canny + Hough), not Tesla’s neural occupancy network.
 
 Windows with MSYS2:
 
@@ -84,4 +85,4 @@ Or create an empty repo on github.com and `git remote add origin …` then `git 
 
 ## What this is not
 
-Tesla Autopilot on a MacBook camera. No actuators, no trained net, no road from the room image. Next perception work is feeding webcam pixels into the same `PerceptionOutput` type without breaking the sim.
+Tesla Autopilot / FSD (neural occupancy, real car). `--webcam` is classical lane lines on a laptop camera steering a **simulated** bicycle. Point it at a hallway or tape lines for a fair test.
