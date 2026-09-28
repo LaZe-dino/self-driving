@@ -1,0 +1,12 @@
+# Atlas Vision lane-network training. On Apple Silicon the standard torch wheel
+# includes the MPS (Metal) backend; no extra index URL is needed.
+torch>=2.1
+torchvision>=0.16
+numpy>=1.24
+opencv-python>=4.8
+onnx>=1.14
+tqdm>=4.65
+pytest>=7.0
+
+# Optional: compare torch vs ONNX Runtime outputs in export_onnx.py
+# onnxruntime>=1.16
