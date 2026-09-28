@@ -42,14 +42,33 @@ Invoke-WebRequest https://github.com/Megvii-BaseDetection/YOLOX/releases/downloa
 
 ## 4. Run
 
+`data/videos` and `data/models` are gitignored; copy or download those files first (step 3). Paste one command at a time.
+
+Waypoint sim (ends with `Path complete`):
+
 ```powershell
-.\build\atlas.exe                                   # waypoint sim, ends with "Path complete"
-.\build\atlas_tests.exe                             # unit tests
-.\build\atlas.exe --video data\videos\project_video.mp4 --camera-model config\udacity_camera.yml
-.\build\atlas.exe --webcam                          # live camera, runs until you press q
+.\build\atlas.exe
 ```
 
-The vision window stays open until you press `q`, close the window, or the video ends. Add `--no-objects` if the model is missing or you want lanes only.
+Unit tests:
+
+```powershell
+.\build\atlas_tests.exe
+```
+
+Recorded video:
+
+```powershell
+.\build\atlas.exe --video data\videos\project_video.mp4 --camera-model config\udacity_camera.yml
+```
+
+Live camera, lanes only (first command to try; runs until you press `q`):
+
+```powershell
+.\build\atlas.exe --webcam --no-objects
+```
+
+The vision window stays open until you press `q`, close the window, or the video ends. Drop `--no-objects` once `data/models/yolox_tiny.onnx` is present. If the default model is missing, Atlas warns and continues with objects off instead of quitting.
 
 ## 5. Calibrate a camera
 
@@ -75,17 +94,24 @@ A camera model only fits frames of the same resolution; the app refuses a mismat
 
 ## 6. Stress tests
 
+Stability summary, no window (LOCKED %, resets, jitter, ms/frame):
+
 ```powershell
-# Stability summary, no window (LOCKED %, resets, jitter, ms/frame)
 .\build\atlas.exe --video data\videos\project_video.mp4 --camera-model config\udacity_camera.yml --headless
 .\build\atlas.exe --video data\videos\challenge_video.mp4 --camera-model config\udacity_camera.yml --headless
 .\build\atlas.exe --video data\videos\harder_challenge_video.mp4 --camera-model config\udacity_camera.yml --headless
 .\build\atlas.exe --video data\videos\p1_challenge.mp4 --camera-model config\p1_camera.yml --headless
+```
 
-# Long run: loop a video, watch memory, drops and reconnects in the 10 s telemetry lines
+Long run: loop a video, watch memory, drops and reconnects in the 10 s telemetry lines:
+
+```powershell
 .\build\atlas.exe --video data\videos\project_video.mp4 --camera-model config\udacity_camera.yml --loop --headless
+```
 
-# Logging budget: small cap to check oldest-session deletion
+Logging budget: small cap to check oldest-session deletion:
+
+```powershell
 .\build\atlas.exe --video data\videos\challenge_video.mp4 --camera-model config\udacity_camera.yml --headless --log --log-budget-mb 50
 ```
 
@@ -101,6 +127,8 @@ Expected on `project_video`: about 99.8% LOCKED, 0 resets, offset jitter ~1.5 cm
 | `--webcam` runs the waypoint map and stops at `Path complete` after a few seconds | A stale `atlas.exe` built before the vision code | Delete `atlas.exe` in the root and in `build\`, rebuild, run `.\build\atlas.exe` |
 | Output looks old after a compile error | The previous exe still ran | Fix the `error:` lines and rebuild first |
 | Camera does not open | No device, wrong index, or Windows privacy block | Try `--camera-index 1`; Settings > Privacy > Camera > allow desktop apps; close other apps using the camera. The source tries MSMF then DirectShow |
-| `objects: ... cannot be loaded` | `data/models/yolox_tiny.onnx` missing | Download it (step 3) or use `--no-objects` |
+| `objects: ... cannot be loaded` | `data/models/yolox_tiny.onnx` missing | Download it (step 3). `--webcam` without `--no-objects` now warns and continues with objects off; `--object-model FILE` still errors if that file is missing |
+| `file not found: data/videos/...` | `data/` is gitignored | Copy or download the clips in step 3 |
+| `VIDEOIO(FFMPEG): ... can't be used to capture by name` | Homebrew OpenCV cannot open files via FFmpeg by name | Harmless if a later backend opens the file; Atlas tries CAP_ANY, FFmpeg, then AVFoundation |
 | `camera model is WxH but frames are ...` | Calibration from a different resolution | Calibrate for this camera or drop `--camera-model` |
 | Very slow (>50 ms/frame) | Debug build | Delete `build\` and reconfigure (default is RelWithDebInfo) |

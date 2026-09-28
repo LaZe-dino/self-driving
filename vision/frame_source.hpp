@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 struct Frame {
     long long id = -1;
@@ -23,6 +24,8 @@ struct FrameSourceStats {
     long long reconnects = 0;
     long long loops = 0;
     double source_fps = 0.0;
+    cv::Size native_size;
+    cv::Size frame_size;
 };
 
 struct SourceSpec {
@@ -32,11 +35,31 @@ struct SourceSpec {
     bool loop = false;
     int width = 1280;
     int height = 720;
+    // Frames are resized to this width right after capture (0 = native).
+    int process_width = 0;
 };
 
-// Opens a video file with FFmpeg, falling back to any other backend
-// (e.g. AVFoundation on macOS) if this OpenCV build lacks FFmpeg.
+// Sentinel for VideoCapture::open(path) with no apiPreference. Must not collide
+// with OpenCV backend ids (CAP_ANY is 0).
+inline constexpr int kVideoBackendDefault = -1;
+
+// Backends to try, in order: CAP_ANY, CAP_FFMPEG, CAP_AVFOUNDATION (macOS),
+// then open(path) with no apiPreference. Homebrew OpenCV often cannot open a
+// file via CAP_FFMPEG by name; CAP_ANY first avoids that warning when another
+// backend can decode the file.
+std::vector<int> video_file_backends();
+bool video_path_is_file(const std::string& path);
+std::string describe_video_open_failure(const std::string& path, bool file_exists);
+
+// Opens a video file, trying video_file_backends() in order. Checks that the
+// path exists before calling OpenCV so a missing gitignored file is not
+// reported as an FFmpeg capture-by-name failure. Asks the backend to apply
+// the file's rotation metadata (phone videos).
 bool open_video_file(cv::VideoCapture& cap, const std::string& path);
+bool open_video_file(cv::VideoCapture& cap, const std::string& path, std::string& error);
+// "rotation metadata 90 deg, auto-rotate on" for backends that report it,
+// otherwise empty.
+std::string describe_orientation(cv::VideoCapture& cap);
 
 // Live cameras: a capture thread keeps only the newest frames (queue of 2,
 // oldest dropped) so processing never falls behind real time.
@@ -70,5 +93,6 @@ private:
     bool ended_ = false;
     FrameSourceStats stats_;
     std::string backend_;
+    std::string orientation_;
     std::chrono::steady_clock::time_point t0_;
 };

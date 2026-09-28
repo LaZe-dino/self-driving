@@ -6,7 +6,13 @@ CMakeUserPresets.json
 *.o
 *.a
 *.dll
+*.onnx
+*.pt
 .cache/
 .DS_Store
 compile_commands.json
 data/
+training/runs/
+.venv/
+__pycache__/
+.pytest_cache/

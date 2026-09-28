@@ -75,6 +75,36 @@ CameraModel default_camera_model(cv::Size image_size, double horizontal_fov_deg)
     return m;
 }
 
+CameraModel scaled_camera_model(const CameraModel& model, cv::Size size) {
+    CameraModel m = model;
+    if (model.image_size.width <= 0 || model.image_size.height <= 0 || size == model.image_size) {
+        return m;
+    }
+    double sx = static_cast<double>(size.width) / model.image_size.width;
+    double sy = static_cast<double>(size.height) / model.image_size.height;
+    m.K(0, 0) = model.K(0, 0) * sx;
+    m.K(0, 1) = model.K(0, 1) * sx;
+    m.K(0, 2) = (model.K(0, 2) + 0.5) * sx - 0.5;
+    m.K(1, 1) = model.K(1, 1) * sy;
+    m.K(1, 2) = (model.K(1, 2) + 0.5) * sy - 0.5;
+    m.image_size = size;
+    m.dist = model.dist.clone();
+    m.source = model.source + " (scaled " + std::to_string(model.image_size.width) + "x" +
+               std::to_string(model.image_size.height) + " -> " + std::to_string(size.width) + "x" +
+               std::to_string(size.height) + ")";
+    m.update();
+    return m;
+}
+
+bool same_aspect_ratio(cv::Size a, cv::Size b, double tolerance) {
+    if (a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0) {
+        return false;
+    }
+    double ra = static_cast<double>(a.width) / a.height;
+    double rb = static_cast<double>(b.width) / b.height;
+    return std::fabs(ra - rb) <= tolerance * ra;
+}
+
 bool load_camera_model(const std::string& path, CameraModel& model, std::string& error) {
     cv::FileStorage fs(path, cv::FileStorage::READ);
     if (!fs.isOpened()) {

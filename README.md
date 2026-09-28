@@ -31,17 +31,34 @@ FrameSource (capture thread, bounded queue, reconnect)
 
 ## Quick start (macOS)
 
+`data/` is gitignored. Copy or download the Udacity videos into `data/videos/` and (optionally) YOLOX into `data/models/` before running vision — see [Data](#data-not-in-git). Homebrew OpenCV often prints `VIDEOIO(FFMPEG): backend is generally available but can't be used to capture by name`; Atlas tries CAP_ANY, then FFmpeg, then AVFoundation, so that warning is handled.
+
 ```bash
 brew install cmake opencv
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j
 ./build/atlas_tests
-./build/atlas --video data/videos/project_video.mp4 --camera-model config/udacity_camera.yml
-./build/atlas --video data/videos/project_video.mp4 --camera-model config/udacity_camera.yml --no-objects   # lanes only
-./build/atlas --webcam
 ```
 
-The configure step must print `OpenCV <version> — Atlas Vision enabled` (4.7+ or 5.x). Get the videos and the model first (see [Data](#data-not-in-git)). The first `--webcam` run triggers the macOS camera permission prompt; if it was denied, allow your terminal (or Cursor) in System Settings > Privacy & Security > Camera and restart it.
+Recorded video, lanes only (no object model required):
+
+```bash
+./build/atlas --video data/videos/project_video.mp4 --camera-model config/udacity_camera.yml --no-objects
+```
+
+With objects, after `data/models/yolox_tiny.onnx` is present:
+
+```bash
+./build/atlas --video data/videos/project_video.mp4 --camera-model config/udacity_camera.yml
+```
+
+Live camera. Start with `--no-objects` so a missing YOLOX file does not quit the window:
+
+```bash
+./build/atlas --webcam --no-objects
+```
+
+The configure step must print `OpenCV <version> — Atlas Vision enabled` (4.7+ or 5.x). The first `--webcam` run triggers the macOS camera permission prompt; if it was denied, allow your terminal (or Cursor) in System Settings > Privacy & Security > Camera and restart it. If the default ONNX file is missing, Atlas now warns and keeps running with objects off; `--object-model FILE` still errors if that file is missing.
 
 ## Quick start (Windows, MSYS2 UCRT64)
 
@@ -92,7 +109,7 @@ The calibrated camera models for these videos are already in `config/`.
 Output of `atlas --help`:
 
 ```text
-atlas --webcam [--camera-index N]            live camera
+atlas --webcam [--camera-index N] [--no-objects]   live camera
 atlas --video FILE [--loop]                  recorded video
    --camera-model FILE.yml   calibration (default: --fov 70 deg, level, 1.4 m high)
    --headless                no window; prints telemetry and a run summary
@@ -101,42 +118,93 @@ atlas --video FILE [--loop]                  recorded video
    --object-model FILE.onnx | --no-objects   (default data/models/yolox_tiny.onnx)
    --flow                    draw optical-flow vectors
    --log [--log-dir DIR] [--log-budget-mb MB]   record training data
+   --process-width W         resize frames to width W right after capture (default: native;
+                             1280 recommended for 1080p/4K phone video)
+atlas --batch-log DIR --camera-model FILE.yml   headless + --log on every .mov/.mp4 in DIR
+   [--process-width W] [--log-dir DIR] [--log-budget-mb MB] [--no-objects] [--max-frames N]
 atlas --review SESSION_DIR [--snapshots DIR] browse / label logged training data
-atlas --calibrate DIR --out FILE.yml         chessboard intrinsics (9x6 inner corners)
+atlas --calibrate DIR --out FILE.yml         chessboard intrinsics from .jpg/.jpeg/.png photos
+atlas --calibrate-video FILE --out FILE.yml  chessboard intrinsics from a video
+   [--board 9x6] (inner corners) [--square-mm 25] [--process-width W]
 atlas --estimate-mount FILE [--camera-model IN.yml | --fov DEG] --out OUT.yml [--lane-width 3.7]
+   [--process-width W]
 ```
 
-Examples (Windows paths; on macOS use `./build/atlas` and `/`):
+`--board` and `--square-mm` also apply to `--calibrate`. If a camera model's size differs from the processed frames but has the same aspect ratio, it is rescaled automatically (with a notice); a different aspect ratio is an error. Portrait videos are rejected.
+
+Examples (Windows paths; on macOS use `./build/atlas` and `/`). Paste one command at a time; do not paste `#` comment suffixes into zsh.
+
+Waypoint sim (no OpenCV needed):
 
 ```powershell
-# Waypoint sim (no OpenCV needed)
 .\build\atlas.exe
+```
 
-# Recorded video with the calibrated Udacity camera
+Recorded video with the calibrated Udacity camera:
+
+```powershell
 .\build\atlas.exe --video data\videos\challenge_video.mp4 --camera-model config\udacity_camera.yml
+```
 
-# Headless benchmark: no window, prints a stability summary at the end
+Headless benchmark (no window; prints a stability summary at the end):
+
+```powershell
 .\build\atlas.exe --video data\videos\project_video.mp4 --camera-model config\udacity_camera.yml --headless
+```
 
-# Save every 100th dashboard image
+Save every 100th dashboard image:
+
+```powershell
 .\build\atlas.exe --video data\videos\p1_solidWhiteRight.mp4 --camera-model config\p1_camera.yml --snapshots data\snap\p1 --snapshot-every 100
+```
 
-# Live webcam (uncalibrated: assumes 70 deg FOV, level, 1.4 m high)
-.\build\atlas.exe --webcam --camera-index 0
+Live webcam (uncalibrated: assumes 70 deg FOV, level, 1.4 m high). `--no-objects` is the first command to try:
 
-# Record training data, then review and label it
+```powershell
+.\build\atlas.exe --webcam --no-objects --camera-index 0
+```
+
+Record training data, then review and label it:
+
+```powershell
 .\build\atlas.exe --video data\videos\challenge_video.mp4 --camera-model config\udacity_camera.yml --log
 .\build\atlas.exe --review data\sessions\20260928_123259_challenge_video
+```
 
-# Calibration
+Calibration:
+
+```powershell
 .\build\atlas.exe --calibrate data\camera_cal --out config\udacity_intrinsics.yml
 .\build\atlas.exe --estimate-mount data\videos\project_video.mp4 --camera-model config\udacity_intrinsics.yml --out config\udacity_camera.yml
+```
 
-# Unit tests
+Phone footage: calibrate from a chessboard video, estimate the mount, auto-label a folder of drives:
+
+```powershell
+.\build\atlas.exe --calibrate-video data\videos\iphone_calib\calib.mov --out config\iphone_intrinsics.yml --board 9x6 --square-mm 25 --process-width 1280
+.\build\atlas.exe --estimate-mount data\videos\iphone_calib\straight.mov --camera-model config\iphone_intrinsics.yml --out config\iphone_camera.yml --process-width 1280
+.\build\atlas.exe --batch-log data\videos\iphone --camera-model config\iphone_camera.yml --process-width 1280 --no-objects
+```
+
+Unit tests:
+
+```powershell
 .\build\atlas_tests.exe
 ```
 
 The headless summary reports the share of frames in each tracker status, resets, lane changes, gate rejections, offset/curvature jitter, how often speed was measured, and processing time percentiles. Those numbers say whether perception was *stable*, not just whether it ran.
+
+## Recording your own data (iPhone)
+
+[docs/IPHONE_RECORDING.md](docs/IPHONE_RECORDING.md) is a step-by-step guide: iPhone camera settings (landscape, 1x lens, 1080p/4K 30 fps, stabilization and Cinematic mode off, AE/AF lock), mounting, chessboard calibration with `--calibrate-video`, mount estimation, moving videos to the Mac, auto-labelling drives with `--batch-log`, reviewing sessions, storage budget, and using the iPhone as a live Continuity Camera webcam.
+
+## Measuring lane accuracy
+
+[docs/EVALUATION.md](docs/EVALUATION.md) describes `atlas_eval`: run the pipeline on the TuSimple benchmark (`--tusimple`), score an external prediction file (`--score PRED.json --labels GT.json`), or summarise human good/bad labels on a logged session (`--session`). The metric is unit-tested; it has not been run on the real TuSimple test set.
+
+## Training a lane network
+
+[training/README.md](training/README.md) is the Python training loop: pseudo-labels from `--log` sessions, optional TuSimple ground truth, `predict.py`, and ONNX export. The package is unit-tested; it has not been trained or evaluated on real recordings yet.
 
 ## Dashboard legend
 
@@ -169,6 +237,7 @@ A frame is kept on a 1 s keyframe timer, on a tracker status change or event, on
 - **Lane pipeline:** tested stable on 6 clips with `--no-objects` on Windows, ~13 ms/frame (~75 fps). Results below. `harder_challenge_video` is a known limitation (hairpin curves leave the BEV, washed-out sun).
 - **Object detection:** crashed on Windows with OpenCV 5.0's new DNN engine. The fix (load YOLOX with the classic engine) is implemented but **untested**.
 - **macOS and OpenCV 4:** the code has macOS / OpenCV 4 paths (AVFoundation capture, `cv_compat.hpp`), but they have not been built or run on a Mac yet.
+- **iPhone / eval / training tooling:** unit-tested (`atlas_tests`, `python -m pytest training/tests`). Not yet run on real iPhone footage, the TuSimple dataset, or a training run.
 - **Not done yet:** no long soak test, no live webcam test.
 
 Lane results on the Udacity/P1 videos (lanes only):
@@ -204,7 +273,10 @@ It is **not** Tesla FSD or Autopilot. There is one camera, no neural lane networ
 | `planning.*`, `world.hpp`, `road.hpp`, `perception.*`, `camera.*`, `viz.*` | Waypoint sim |
 | `vision/` | Atlas Vision library and app (see [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md) for the file map) |
 | `tests/` | `atlas_tests` unit tests |
+| `docs/` | Guides ([iPhone recording](docs/IPHONE_RECORDING.md), [evaluation](docs/EVALUATION.md)) |
+| `tools/` | `atlas_eval` (TuSimple, `--score`, session labels) |
+| `training/` | Lane-network training ([README](training/README.md)) |
 | `config/` | Camera models (`udacity_intrinsics.yml`, `udacity_camera.yml`, `p1_camera.yml`) |
 | `data/` (ignored) | Videos, calibration images, model, sessions, snapshots |
 
-Do not commit `build/`, `.exe` files or `data/` (see `.gitignore`).
+Do not commit `build/`, `.exe` files, `data/`, `training/runs/`, `.venv/` or weight files (see `.gitignore`).

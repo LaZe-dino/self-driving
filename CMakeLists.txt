@@ -26,7 +26,9 @@ add_executable(atlas
     camera.cpp
 )
 target_compile_options(atlas PRIVATE -Wall -Wextra)
-target_link_libraries(atlas PRIVATE atlas_core)
+# atlas_core is linked once: via atlas_vision (PUBLIC) when OpenCV is on, or
+# directly below when it is not. Linking both produced
+# `ld: ignoring duplicate libraries: libatlas_core.a` on macOS.
 
 find_package(OpenCV QUIET)
 if(OpenCV_FOUND)
@@ -52,6 +54,7 @@ if(OpenCV_FOUND)
         vision/dashboard.cpp
         vision/data_logger.cpp
         vision/review.cpp
+        vision/video_prep.cpp
     )
     target_compile_options(atlas_vision PRIVATE -Wall -Wextra)
     target_include_directories(atlas_vision PUBLIC ${OpenCV_INCLUDE_DIRS})
@@ -70,9 +73,28 @@ if(OpenCV_FOUND)
         tests/test_lanes.cpp
         tests/test_tracker.cpp
         tests/test_horizon.cpp
+        tests/test_video_prep.cpp
+        tests/test_frame_source.cpp
+        tests/test_eval.cpp
     )
     target_compile_options(atlas_tests PRIVATE -Wall -Wextra)
-    target_link_libraries(atlas_tests PRIVATE atlas_vision)
+
+    # Lane accuracy against human labels (TuSimple, reviewed sessions).
+    add_library(atlas_eval_core STATIC
+        tools/lane_rasterize.cpp
+        tools/tusimple.cpp
+        tools/tusimple_eval.cpp
+        tools/tusimple_score.cpp
+        tools/session_eval.cpp
+    )
+    target_compile_options(atlas_eval_core PRIVATE -Wall -Wextra)
+    target_link_libraries(atlas_eval_core PUBLIC atlas_vision)
+    add_executable(atlas_eval tools/eval_lanes.cpp)
+    target_compile_options(atlas_eval PRIVATE -Wall -Wextra)
+    target_link_libraries(atlas_eval PRIVATE atlas_eval_core)
+    # eval_core already PUBLIC-links atlas_vision (and thus atlas_core once).
+    target_link_libraries(atlas_tests PRIVATE atlas_eval_core)
 else()
+    target_link_libraries(atlas PRIVATE atlas_core)
     message(STATUS "OpenCV not found — sim only. Install OpenCV and reconfigure for Atlas Vision")
 endif()

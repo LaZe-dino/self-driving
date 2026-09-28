@@ -1,7 +1,10 @@
 #include "frame_source.hpp"
+#include "video_prep.hpp"
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -22,8 +25,62 @@ const char* kCameraHint = "no V4L2 device, it is in use, or no permission on /de
 
 }  // namespace
 
+std::vector<int> video_file_backends() {
+    std::vector<int> backends = {cv::CAP_ANY, cv::CAP_FFMPEG};
+#if defined(__APPLE__)
+    backends.push_back(cv::CAP_AVFOUNDATION);
+#endif
+    backends.push_back(kVideoBackendDefault);
+    return backends;
+}
+
+bool video_path_is_file(const std::string& path) {
+    std::error_code ec;
+    return std::filesystem::is_regular_file(path, ec);
+}
+
+std::string describe_video_open_failure(const std::string& path, bool file_exists) {
+    if (!file_exists) {
+        return "file not found: " + path +
+               "\ndata/videos is gitignored and is not cloned with the repo. "
+               "Copy or download the clips listed in README.md (Data section).";
+    }
+    return "could not decode video file " + path +
+           " (the file exists, but no OpenCV backend could open it)";
+}
+
+bool open_video_file(cv::VideoCapture& cap, const std::string& path, std::string& error) {
+    if (!video_path_is_file(path)) {
+        error = describe_video_open_failure(path, false);
+        return false;
+    }
+    for (int backend : video_file_backends()) {
+        cap.release();
+        bool ok = backend == kVideoBackendDefault ? cap.open(path) : cap.open(path, backend);
+        if (ok && cap.isOpened()) {
+            // FFmpeg defaults to on; set it anyway. Backends without the
+            // property just return false.
+            cap.set(cv::CAP_PROP_ORIENTATION_AUTO, 1);
+            error.clear();
+            return true;
+        }
+    }
+    error = describe_video_open_failure(path, true);
+    return false;
+}
+
 bool open_video_file(cv::VideoCapture& cap, const std::string& path) {
-    return cap.open(path, cv::CAP_FFMPEG) || cap.open(path, cv::CAP_ANY);
+    std::string error;
+    return open_video_file(cap, path, error);
+}
+
+std::string describe_orientation(cv::VideoCapture& cap) {
+    if (cap.getBackendName() != "FFMPEG") {
+        return "";
+    }
+    int meta = static_cast<int>(cap.get(cv::CAP_PROP_ORIENTATION_META));
+    bool automatic = cap.get(cv::CAP_PROP_ORIENTATION_AUTO) != 0;
+    return "rotation metadata " + std::to_string(meta) + " deg, auto-rotate " + (automatic ? "on" : "off");
 }
 
 FrameSource::~FrameSource() {
@@ -44,12 +101,12 @@ bool FrameSource::open_capture(std::string& error) {
         cap_.set(cv::CAP_PROP_FRAME_WIDTH, spec_.width);
         cap_.set(cv::CAP_PROP_FRAME_HEIGHT, spec_.height);
     } else {
-        if (!open_video_file(cap_, spec_.path)) {
-            error = "could not open video file " + spec_.path;
+        if (!open_video_file(cap_, spec_.path, error)) {
             return false;
         }
     }
     backend_ = cap_.getBackendName();
+    orientation_ = spec_.live ? "" : describe_orientation(cap_);
     stats_.source_fps = cap_.get(cv::CAP_PROP_FPS);
     return true;
 }
@@ -144,6 +201,13 @@ void FrameSource::capture_loop() {
         }
         consecutive_failures = 0;
 
+        cv::Size native = frame.image.size();
+        frame.image = resize_for_processing(frame.image, processing_size(native, spec_.process_width));
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stats_.native_size = native;
+            stats_.frame_size = frame.image.size();
+        }
         frame.id = next_id++;
         frame.capture_time_s = now;
         if (spec_.live) {
@@ -189,5 +253,6 @@ std::string FrameSource::describe() const {
     if (spec_.live) {
         return "camera " + std::to_string(spec_.camera_index) + " via " + backend_;
     }
-    return spec_.path + " via " + backend_ + (spec_.loop ? " (looping)" : "");
+    return spec_.path + " via " + backend_ + (orientation_.empty() ? "" : " (" + orientation_ + ")") +
+           (spec_.loop ? " (looping)" : "");
 }

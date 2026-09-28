@@ -41,5 +41,15 @@ struct CameraModel {
 };
 
 CameraModel default_camera_model(cv::Size image_size, double horizontal_fov_deg);
+
+// The same camera after cv::resize to `size`. Pixel centres map as
+// u' = sx (u + 0.5) - 0.5, so fx, fy scale and cx, cy scale about the pixel
+// centre. Distortion acts on normalised coordinates and is unchanged; so is
+// the mount (height, pitch, yaw).
+CameraModel scaled_camera_model(const CameraModel& model, cv::Size size);
+
+// True when a and b have the same width:height ratio within `tolerance`
+// (relative), i.e. one is a plain resize of the other.
+bool same_aspect_ratio(cv::Size a, cv::Size b, double tolerance = 0.005);
 bool load_camera_model(const std::string& path, CameraModel& model, std::string& error);
 bool save_camera_model(const std::string& path, const CameraModel& model, std::string& error);

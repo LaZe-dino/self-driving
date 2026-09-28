@@ -7,6 +7,7 @@
 #include "pipeline.hpp"
 #include "process_stats.hpp"
 #include "review.hpp"
+#include "video_prep.hpp"
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/videoio.hpp>
@@ -14,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -26,7 +28,11 @@ struct Options {
     std::string camera_model_path;
     std::string out_path;
     std::string calib_dir;
+    std::string calib_video;
+    std::string batch_dir;
     std::string review_dir;
+    ChessboardOptions chessboard;
+    int process_width = 0;
     bool headless = false;
     long long max_frames = -1;
     double lane_width_m = 3.7;
@@ -35,6 +41,7 @@ struct Options {
     long long snapshot_every = 100;
     bool show_flow = false;
     bool objects = true;
+    bool object_model_explicit = false;
     ObjectDetectorParams object_params;
     bool log = false;
     DataLoggerConfig logger;
@@ -43,7 +50,7 @@ struct Options {
 void usage() {
     std::cout <<
         "Atlas Vision\n"
-        "  atlas --webcam [--camera-index N]            live camera\n"
+        "  atlas --webcam [--camera-index N] [--no-objects]   live camera\n"
         "  atlas --video FILE [--loop]                  recorded video\n"
         "     --camera-model FILE.yml   calibration (default: --fov 70 deg, level, 1.4 m high)\n"
         "     --headless                no window; prints telemetry and a run summary\n"
@@ -52,9 +59,16 @@ void usage() {
         "     --object-model FILE.onnx | --no-objects   (default data/models/yolox_tiny.onnx)\n"
         "     --flow                    draw optical-flow vectors\n"
         "     --log [--log-dir DIR] [--log-budget-mb MB]   record training data\n"
+        "     --process-width W         resize frames to width W right after capture (default: native;\n"
+        "                               1280 recommended for 1080p/4K phone video)\n"
+        "  atlas --batch-log DIR --camera-model FILE.yml   headless + --log on every .mov/.mp4 in DIR\n"
+        "     [--process-width W] [--log-dir DIR] [--log-budget-mb MB] [--no-objects] [--max-frames N]\n"
         "  atlas --review SESSION_DIR [--snapshots DIR] browse / label logged training data\n"
-        "  atlas --calibrate DIR --out FILE.yml         chessboard intrinsics (9x6 inner corners)\n"
-        "  atlas --estimate-mount FILE [--camera-model IN.yml | --fov DEG] --out OUT.yml [--lane-width 3.7]\n";
+        "  atlas --calibrate DIR --out FILE.yml         chessboard intrinsics from .jpg/.jpeg/.png photos\n"
+        "  atlas --calibrate-video FILE --out FILE.yml  chessboard intrinsics from a video\n"
+        "     [--board 9x6] (inner corners) [--square-mm 25] [--process-width W]\n"
+        "  atlas --estimate-mount FILE [--camera-model IN.yml | --fov DEG] --out OUT.yml [--lane-width 3.7]\n"
+        "     [--process-width W]\n";
 }
 
 bool parse(int argc, char** argv, Options& o) {
@@ -96,6 +110,7 @@ bool parse(int argc, char** argv, Options& o) {
             o.objects = false;
         } else if (a == "--object-model") {
             if (!value(o.object_params.model_path)) return false;
+            o.object_model_explicit = true;
         } else if (a == "--flow") {
             o.show_flow = true;
         } else if (a == "--log") {
@@ -112,6 +127,31 @@ bool parse(int argc, char** argv, Options& o) {
         } else if (a == "--calibrate") {
             o.mode = "calibrate";
             if (!value(o.calib_dir)) return false;
+        } else if (a == "--calibrate-video") {
+            o.mode = "calibrate-video";
+            if (!value(o.calib_video)) return false;
+        } else if (a == "--board") {
+            if (!value(v)) return false;
+            int c = 0, r = 0;
+            if (std::sscanf(v.c_str(), "%dx%d", &c, &r) != 2 || c < 2 || r < 2) {
+                std::cerr << "--board wants inner corners as COLSxROWS, e.g. 9x6\n";
+                return false;
+            }
+            o.chessboard.inner_cols = c;
+            o.chessboard.inner_rows = r;
+        } else if (a == "--square-mm") {
+            if (!value(v)) return false;
+            o.chessboard.square_mm = std::stod(v);
+        } else if (a == "--process-width") {
+            if (!value(v)) return false;
+            o.process_width = std::stoi(v);
+            if (o.process_width < 0) {
+                std::cerr << "--process-width must be >= 0\n";
+                return false;
+            }
+        } else if (a == "--batch-log") {
+            o.mode = "batch-log";
+            if (!value(o.batch_dir)) return false;
         } else if (a == "--estimate-mount") {
             o.mode = "estimate-mount";
             if (!value(o.source.path)) return false;
@@ -140,20 +180,60 @@ void print_model(const CameraModel& m) {
                 m.pitch_rad * 180.0 / CV_PI, m.yaw_rad * 180.0 / CV_PI);
 }
 
+const char* kPortraitHint = "record in landscape (phone on its side) and keep the same orientation for "
+                             "calibration and drives";
+
+// Makes the camera model match the processed frame size: rescales it when
+// only the resolution differs, fails when the aspect ratio differs.
+bool fit_camera_to_frames(CameraModel& camera, cv::Size frames, std::string& error) {
+    if (camera.image_size == frames) {
+        return true;
+    }
+    auto dims = [](cv::Size s) { return std::to_string(s.width) + "x" + std::to_string(s.height); };
+    if (!same_aspect_ratio(camera.image_size, frames)) {
+        error = "camera model is " + dims(camera.image_size) + " but frames are " + dims(frames) +
+                " (different aspect ratio: recalibrate at this resolution/orientation)";
+        return false;
+    }
+    std::cout << "notice: camera model is " << dims(camera.image_size) << ", frames are " << dims(frames)
+              << "; scaling the intrinsics to match\n";
+    camera = scaled_camera_model(camera, frames);
+    return true;
+}
+
 int run_calibrate(const Options& o) {
     if (o.out_path.empty()) {
-        std::cerr << "--calibrate needs --out FILE.yml\n";
+        std::cerr << "--calibrate / --calibrate-video need --out FILE.yml\n";
         return 1;
     }
+    ChessboardOptions opts = o.chessboard;
+    opts.process_width = o.process_width;
+    std::printf("board %dx%d inner corners, %.1f mm squares\n", opts.inner_cols, opts.inner_rows, opts.square_mm);
     CameraModel model;
     ChessboardResult r;
     std::string error;
-    if (!calibrate_from_chessboards(o.calib_dir, 9, 6, model, r, error)) {
+    bool ok = o.mode == "calibrate-video"
+                  ? calibrate_from_chessboard_video(o.calib_video, opts, model, r, error)
+                  : calibrate_from_chessboards(o.calib_dir, opts, model, r, error);
+    if (!ok) {
         std::cerr << "calibration failed: " << error << "\n";
         return 1;
     }
-    std::printf("used %d/%d images, RMS reprojection error %.3f px\n", r.images_used,
-                r.images_total, r.rms_reprojection_px);
+    std::printf("per-view reprojection error (px):\n");
+    for (std::size_t i = 0; i < r.per_view_error_px.size(); ++i) {
+        std::printf("  %-24s %.3f\n", r.view_names[i].c_str(), r.per_view_error_px[i]);
+    }
+    std::printf("used %d views (%d with a board, %d total), %d outliers rejected\n", r.images_used,
+                r.boards_found, r.images_total, r.outliers_rejected);
+    std::printf("RMS reprojection error %.3f px (before outlier rejection %.3f px)\n", r.rms_reprojection_px,
+                r.rms_initial_px);
+    if (r.rms_reprojection_px > 1.0) {
+        std::printf("warning: RMS > 1 px; check the board is flat, sharp and the --board size is right\n");
+    }
+    if (r.images_used < 15) {
+        std::printf("warning: only %d views; 15-40 views covering the frame edges give stable intrinsics\n",
+                    r.images_used);
+    }
     print_model(model);
     if (!save_camera_model(o.out_path, model, error)) {
         std::cerr << error << "\n";
@@ -170,23 +250,35 @@ int run_estimate_mount(const Options& o) {
     }
     CameraModel model;
     std::string error;
-    if (o.camera_model_path.empty()) {
+    cv::Size frames;
+    {
         cv::VideoCapture cap;
         cv::Mat first;
-        if (!open_video_file(cap, o.source.path) || !cap.read(first)) {
-            std::cerr << "cannot read " << o.source.path << "\n";
+        if (!open_video_file(cap, o.source.path, error) || !cap.read(first)) {
+            std::cerr << (error.empty() ? "cannot read " + o.source.path : error) << "\n";
             return 1;
         }
-        model = default_camera_model(first.size(), o.fov_deg);
+        frames = processing_size(first.size(), o.process_width);
+        std::string orientation = describe_orientation(cap);
+        std::printf("video %dx%d%s%s, processing at %dx%d\n", first.cols, first.rows,
+                    orientation.empty() ? "" : ", ", orientation.c_str(), frames.width, frames.height);
+        if (first.rows > first.cols) {
+            std::cerr << "video is portrait; " << kPortraitHint << "\n";
+            return 1;
+        }
+    }
+    if (o.camera_model_path.empty()) {
+        model = default_camera_model(frames, o.fov_deg);
         std::cout << "no --camera-model: assuming " << o.fov_deg
                   << " deg horizontal FOV and no lens distortion (distances will be approximate)\n";
-    } else if (!load_camera_model(o.camera_model_path, model, error)) {
+    } else if (!load_camera_model(o.camera_model_path, model, error) ||
+               !fit_camera_to_frames(model, frames, error)) {
         std::cerr << error << "\n";
         return 1;
     }
     MountEstimate e;
-    int frames = o.max_frames > 0 ? static_cast<int>(o.max_frames) : 300;
-    if (!estimate_mount_from_video(o.source.path, o.lane_width_m, frames, model, e, error)) {
+    int max_frames = o.max_frames > 0 ? static_cast<int>(o.max_frames) : 300;
+    if (!estimate_mount_from_video(o.source.path, o.lane_width_m, max_frames, model, e, error)) {
         std::cerr << "mount estimation failed: " << error << "\n";
         return 1;
     }
@@ -278,31 +370,50 @@ struct RunStats {
     }
 };
 
-int run_vision(const Options& o) {
+struct RunResult {
+    int code = 1;
+    std::string error;
+    RunStats stats;
+    double wall_s = 0.0;
+    std::string session_dir;
+};
+
+// One video / camera run with the given options: used by --video, --webcam
+// and once per file by --batch-log.
+RunResult run_vision(const Options& o) {
+    RunResult result;
+    auto fail = [&](const std::string& message) {
+        std::cerr << "Atlas Vision: " << message << "\n";
+        result.error = message;
+        result.code = 1;
+        return result;
+    };
     FrameSource source;
     std::string error;
     if (!source.open(o.source, error)) {
-        std::cerr << "Atlas Vision: " << error << "\n";
-        return 1;
+        return fail(error);
     }
     std::cout << "source: " << source.describe() << "\n";
 
     Frame frame;
     if (!source.next(frame)) {
-        std::cerr << "Atlas Vision: source produced no frames\n";
-        return 1;
+        return fail("source produced no frames");
+    }
+    {
+        FrameSourceStats s = source.stats();
+        std::printf("frames: native %dx%d, processing %dx%d\n", s.native_size.width, s.native_size.height,
+                    frame.image.cols, frame.image.rows);
+    }
+    if (frame.image.rows > frame.image.cols) {
+        return fail("source is portrait (" + std::to_string(frame.image.cols) + "x" +
+                    std::to_string(frame.image.rows) + "); " + kPortraitHint);
     }
     CameraModel camera;
     if (o.camera_model_path.empty()) {
         camera = default_camera_model(frame.image.size(), o.fov_deg);
-    } else if (!load_camera_model(o.camera_model_path, camera, error)) {
-        std::cerr << error << "\n";
-        return 1;
-    }
-    if (camera.image_size != frame.image.size()) {
-        std::cerr << "camera model is " << camera.image_size.width << "x" << camera.image_size.height
-                  << " but frames are " << frame.image.cols << "x" << frame.image.rows << "\n";
-        return 1;
+    } else if (!load_camera_model(o.camera_model_path, camera, error) ||
+               !fit_camera_to_frames(camera, frame.image.size(), error)) {
+        return fail(error);
     }
     std::cout << "camera model: " << camera.source << "\n";
     print_model(camera);
@@ -311,12 +422,22 @@ int run_vision(const Options& o) {
     pipeline.configure(camera, GroundGrid());
     if (o.objects) {
         if (!pipeline.enable_objects(o.object_params, error)) {
-            std::cerr << "objects: " << error << "\n"
-                      << "Download https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/"
-                         "yolox_tiny.onnx to data/models/, pass --object-model FILE, or run with --no-objects.\n";
-            return 1;
+            bool missing_default = !o.object_model_explicit &&
+                                   error.find("object model not found") != std::string::npos;
+            if (missing_default) {
+                std::cerr << "warning: " << error
+                          << " — continuing with objects off. Download "
+                             "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/"
+                             "yolox_tiny.onnx to data/models/, or pass --object-model FILE.\n";
+                std::cout << "objects: off (default model missing)\n";
+            } else {
+                std::cerr << "Download https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/"
+                             "yolox_tiny.onnx to data/models/, pass --object-model FILE, or run with --no-objects.\n";
+                return fail("objects: " + error);
+            }
+        } else {
+            std::cout << "objects: " << o.object_params.model_path << "\n";
         }
-        std::cout << "objects: " << o.object_params.model_path << "\n";
     } else {
         std::cout << "objects: off (--no-objects)\n";
     }
@@ -325,9 +446,9 @@ int run_vision(const Options& o) {
     if (o.log) {
         std::string name = o.source.live ? "webcam" + std::to_string(o.source.camera_index) : o.source.path;
         if (!logger.start(o.logger, name, camera, pipeline.ground().grid(), error)) {
-            std::cerr << "logger: " << error << "\n";
-            return 1;
+            return fail("logger: " + error);
         }
+        result.session_dir = logger.session_dir();
         std::cout << "logging to " << logger.session_dir() << "\n";
     }
 
@@ -337,7 +458,7 @@ int run_vision(const Options& o) {
     auto t_fps = t_start;
     long long since_report = 0;
     double loop_fps = 0.0;
-    RunStats stats;
+    RunStats& stats = result.stats;
     DashboardStatus ds;
     ds.source = source.describe();
     ds.camera = camera.source;
@@ -346,6 +467,7 @@ int run_vision(const Options& o) {
     bool have_frame = true;
     bool paused = false;
     bool step_once = false;
+    bool window_created = false;
     bool window_seen = false;
 
     while (have_frame) {
@@ -379,6 +501,10 @@ int run_vision(const Options& o) {
                 cv::imwrite(o.snapshot_dir + "/dash_" + std::to_string(pf.frame_id) + ".jpg", view);
             }
             if (!o.headless) {
+                if (!window_created) {
+                    cv::namedWindow("Atlas Vision", cv::WINDOW_NORMAL);
+                    window_created = true;
+                }
                 cv::imshow("Atlas Vision", view);
                 int key = cv::waitKey(paused ? 30 : 1);
                 if (key == 'q' || key == 27) break;
@@ -388,12 +514,13 @@ int run_vision(const Options& o) {
                 if (key == 'r') ds.raw_only = !ds.raw_only;
                 if (key == 'g') logger.label_next("good");
                 if (key == 'b') logger.label_next("bad");
-                // Backends that do not implement WND_PROP_VISIBLE return -1, so
-                // only treat "not visible" as closed once it has been visible.
+                // Backends that do not implement WND_PROP_VISIBLE return -1.
+                // Only quit after the window has been visible (>= 1) and later
+                // reports 0 (user closed it). Do not treat -1 as closed.
                 double visible = cv::getWindowProperty("Atlas Vision", cv::WND_PROP_VISIBLE);
-                if (visible >= 1) {
+                if (visible >= 1.0) {
                     window_seen = true;
-                } else if (window_seen) {
+                } else if (window_seen && visible == 0.0) {
                     break;
                 }
             }
@@ -426,8 +553,66 @@ int run_vision(const Options& o) {
     std::printf("source: dropped=%lld read_fail=%lld reconnects=%lld\n", s.dropped, s.read_failures,
                 s.reconnects);
     stats.print(wall);
-    cv::destroyAllWindows();
-    return 0;
+    if (!o.headless) {
+        cv::destroyAllWindows();
+    }
+    result.wall_s = wall;
+    result.code = 0;
+    return result;
+}
+
+int run_batch(const Options& o) {
+    if (o.camera_model_path.empty()) {
+        std::cerr << "--batch-log needs --camera-model FILE.yml (calibrate first: see docs/IPHONE_RECORDING.md)\n";
+        return 1;
+    }
+    std::vector<std::string> videos = list_files(o.batch_dir, is_video_file_name);
+    if (videos.empty()) {
+        std::cerr << "no .mov/.mp4/.m4v files in " << o.batch_dir << "\n";
+        return 1;
+    }
+    std::printf("batch: %zu videos, logging to %s, storage budget %.0f MB total / %.0f MB per session\n",
+                videos.size(), o.logger.root.c_str(), o.logger.max_total_mb, o.logger.max_session_mb);
+    std::printf("note: when the total budget is exceeded the OLDEST sessions in %s are deleted, including "
+                "earlier ones from this batch; raise it with --log-budget-mb if needed\n",
+                o.logger.root.c_str());
+    if (!o.snapshot_dir.empty()) {
+        std::printf("note: --snapshots is ignored in batch mode\n");
+    }
+
+    std::vector<RunResult> results;
+    for (std::size_t i = 0; i < videos.size(); ++i) {
+        std::printf("\n==== [%zu/%zu] %s ====\n", i + 1, videos.size(), videos[i].c_str());
+        std::fflush(stdout);
+        Options v = o;
+        v.mode = "run";
+        v.source.live = false;
+        v.source.loop = false;
+        v.source.path = videos[i];
+        v.headless = true;
+        v.log = true;
+        v.snapshot_dir.clear();
+        results.push_back(run_vision(v));
+    }
+
+    int failed = 0;
+    std::printf("\n==== batch summary ====\n");
+    for (std::size_t i = 0; i < videos.size(); ++i) {
+        const RunResult& r = results[i];
+        std::string name = std::filesystem::path(videos[i]).filename().string();
+        if (r.code != 0) {
+            ++failed;
+            std::printf("%-28s FAILED: %s\n", name.c_str(), r.error.c_str());
+            continue;
+        }
+        const RunStats& s = r.stats;
+        double n = s.frames > 0 ? static_cast<double>(s.frames) : 1.0;
+        std::printf("%-28s frames %6lld  %6.1f s  LOCKED %5.1f%%  conf %.2f  resets %lld  -> %s\n", name.c_str(),
+                    s.frames, r.wall_s, 100.0 * s.per_status[static_cast<int>(TrackStatus::Locked)] / n,
+                    s.conf_sum / n, s.resets, r.session_dir.c_str());
+    }
+    std::printf("%zu ok, %d failed\n", videos.size() - failed, failed);
+    return failed == 0 ? 0 : 1;
 }
 
 }  // namespace
@@ -445,7 +630,8 @@ int atlas_vision_main(int argc, char** argv) {
         usage();
         return 0;
     }
-    if (o.mode == "calibrate") {
+    o.source.process_width = o.process_width;
+    if (o.mode == "calibrate" || o.mode == "calibrate-video") {
         return run_calibrate(o);
     }
     if (o.mode == "estimate-mount") {
@@ -454,5 +640,8 @@ int atlas_vision_main(int argc, char** argv) {
     if (o.mode == "review") {
         return review_session(o.review_dir, o.snapshot_dir);
     }
-    return run_vision(o);
+    if (o.mode == "batch-log") {
+        return run_batch(o);
+    }
+    return run_vision(o).code;
 }
