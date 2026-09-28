@@ -13,7 +13,21 @@ Personal C++ learning project: simplified autonomous driving in simulation, **Te
 - Build: CMake + Ninja — `cmake --build build` then `.\build\atlas.exe`. See `HOW_TO_RUN.md`.
 - If compile fails, old `atlas.exe` may still run—don’t trust that output.
 
-## Stack (current)
+## Atlas Vision (current focus)
+
+Camera perception in `vision/`, run with `atlas --video FILE` or `atlas --webcam` (needs OpenCV). Pipeline, CLI, data sources and status are in `README.md`. File map:
+
+- `app.*` — CLI parsing and run modes; `pipeline.*` — runs the stages into one `PerceptionFrame`
+- `frame_source.*` — capture thread, bounded queue, reconnect; `camera_model.*`, `calibration.*` — intrinsics, mount, undistort
+- `object_detector.*` (YOLOX-tiny via OpenCV DNN), `object_tracker.*` — boxes, ground distance, TTC
+- `ground_view.*` — bird's-eye homography; `ego_motion.*` — optical-flow speed and yaw rate
+- `lane_detector.*`, `lane_tracker.*`, `lane_types.hpp` — BEV lane fits and Kalman road model
+- `horizon_estimator.*` — online pitch; `road_geometry.*` — offset, heading, curvature
+- `dashboard.*`, `data_logger.*`, `review.*` — display, training-data log, label browser
+- `process_stats.*` — memory/CPU telemetry; `cv_compat.hpp` — OpenCV 4/5 header differences
+- `tests/` — `atlas_tests` unit tests (13)
+
+## Waypoint sim (original stack, `atlas` with no arguments)
 
 ```text
 Road (centerline) → fake_perceive → PerceptionOutput
@@ -65,9 +79,9 @@ Pose is still **ground-truth sim** (no cameras, no localization). `fake_perceive
 
 ## Roadmap
 
-- Done: vehicle, Pure Pursuit, CMake, module split, WorldState, road edges, fake perception, animation
-- **Next toward Autopilot-like perception:** denser centerline / smoother lane corners → synthetic camera image → OpenCV lanes into **same** PerceptionOutput → small NN replacing `fake_perceive`
-- Later: obstacles, prediction, PID/Stanley, ROS 2 optional
+- Done: vehicle, Pure Pursuit, CMake, module split, WorldState, road edges, fake perception, animation; Atlas Vision (lanes, tracker, ego-motion, pitch, objects, dashboard, logger, review)
+- **Next:** verify object detection with the classic DNN engine, build/test on macOS, long soak test, live webcam test, better handling of hairpins and glare
+- Later: neural lane head trained on logged data, PID/Stanley, ROS 2 optional
 
 ## Honest Tesla note
 
