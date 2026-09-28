@@ -9,7 +9,9 @@
 #include "viz.hpp"
 #include <vector>
 #include "camera.hpp"
-#include "webcam.hpp"
+#ifdef ATLAS_HAS_OPENCV
+#include "vision/app.hpp"
+#endif
 
 static int run_waypoint_sim() {
     Config cfg;
@@ -85,47 +87,19 @@ static int run_waypoint_sim() {
     return 0;
 }
 
-static int run_vision_drive() {
-    if (!atlas_webcam_available()) {
-        atlas_webcam_start();
-        return 1;
-    }
-    if (!atlas_webcam_start()) {
-        return 1;
-    }
-
-    Config cfg;
-    Vehicle car(0.0, 0.0, 0.0, 0.0, 0.0);
-    VisionCommand vision;
-    const double dt = 0.05;
-
-    std::cout << "Closed loop: camera → lanes → steering/speed → bicycle model.\n"
-              << "The window stays open until you press q. Waypoints are not used.\n";
-
-    while (atlas_webcam_pump(vision)) {
-        car.set_steering(vision.steering);
-        car.set_acceleration(cfg.accel_gain * (vision.target_speed - car.get_velocity()));
-        car.step(dt);
-    }
-
-    atlas_webcam_stop();
-    std::cout << "Vision session ended. x=" << car.get_x()
-              << " m  y=" << car.get_y()
-              << " m  heading=" << car.get_heading()
-              << " rad  v=" << car.get_velocity() << " m/s\n";
-    return 0;
-}
-
 int main(int argc, char** argv) {
-    bool want_webcam = false;
-    for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--webcam") {
-            want_webcam = true;
-        }
+#ifdef ATLAS_HAS_OPENCV
+    int vision_result = atlas_vision_main(argc, argv);
+    if (vision_result >= 0) {
+        return vision_result;
     }
-
-    if (want_webcam) {
-        return run_vision_drive();
+#else
+    if (argc > 1) {
+        std::cerr << "This build has no OpenCV, so Atlas Vision is unavailable.\n"
+                  << "Windows MSYS2 UCRT64: pacman -S mingw-w64-ucrt-x86_64-opencv mingw-w64-ucrt-x86_64-qt6-base\n"
+                  << "Then delete build/, reconfigure CMake and rebuild.\n";
+        return 1;
     }
+#endif
     return run_waypoint_sim();
 }

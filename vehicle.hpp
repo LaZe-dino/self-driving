@@ -1,3 +1,5 @@
+#pragma once
+
 class Vehicle {
     private:
         double x;
