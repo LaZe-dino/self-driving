@@ -1,0 +1,11 @@
+build/
+out/
+CMakeUserPresets.json
+*.exe
+*.obj
+*.o
+*.a
+*.dll
+.cache/
+.DS_Store
+compile_commands.json

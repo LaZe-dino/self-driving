@@ -1,0 +1,47 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "cmake configure",
+            "type": "shell",
+            "command": "cmake",
+            "options": {
+                "env": {
+                    "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}"
+                },
+                "cwd": "${workspaceFolder}"
+            },
+            "args": [
+                "-S",
+                ".",
+                "-B",
+                "build",
+                "-G",
+                "Ninja",
+                "-DCMAKE_CXX_COMPILER=C:/msys64/ucrt64/bin/g++.exe"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "build atlas",
+            "type": "shell",
+            "command": "cmake",
+            "options": {
+                "env": {
+                    "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}"
+                },
+                "cwd": "${workspaceFolder}"
+            },
+            "args": [
+                "--build",
+                "build"
+            ],
+            "dependsOn": "cmake configure",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        }
+    ]
+}
