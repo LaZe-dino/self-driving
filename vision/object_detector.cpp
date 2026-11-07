@@ -109,7 +109,26 @@ void ObjectDetector::detect(const cv::Mat& bgr, std::vector<Detection>& out) {
     for (const cv::Rect2d& b : boxes) int_boxes.push_back(cv::Rect(b));
     std::vector<int> keep;
     // Non-maximum suppression per class: of overlapping boxes, keep the best.
+#if CV_VERSION_MAJOR > 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7)
     cv::dnn::NMSBoxesBatched(int_boxes, scores, classes, p_.score_threshold, p_.nms_threshold, keep);
+#else
+    // OpenCV < 4.7: run NMS per class (Ubuntu 24.04 ships 4.6).
+    for (int cls = 0; cls < 80; ++cls) {
+        std::vector<cv::Rect> cls_boxes;
+        std::vector<float> cls_scores;
+        std::vector<int> cls_idx;
+        for (size_t i = 0; i < classes.size(); ++i) {
+            if (classes[i] != cls) continue;
+            cls_boxes.push_back(int_boxes[i]);
+            cls_scores.push_back(scores[i]);
+            cls_idx.push_back(static_cast<int>(i));
+        }
+        if (cls_boxes.empty()) continue;
+        std::vector<int> cls_keep;
+        cv::dnn::NMSBoxes(cls_boxes, cls_scores, p_.score_threshold, p_.nms_threshold, cls_keep);
+        for (int j : cls_keep) keep.push_back(cls_idx[j]);
+    }
+#endif
     cv::Rect2d image(0, 0, bgr.cols, bgr.rows);
     for (int k : keep) {
         out.push_back({boxes[k] & image, classes[k], scores[k]});
